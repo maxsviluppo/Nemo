@@ -1,0 +1,8 @@
+{
+  "name": "PetRobot Expressive Face",
+  "description": "A high-fidelity expressive robot face simulation with fluid SVG eye animations, autonomous idle movements, and sound-reactive emotional shifts.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
