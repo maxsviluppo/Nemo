@@ -1,10 +1,10 @@
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="it">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PetRobot Face</title>
+    <title>Nemo - PetRobot Face</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       body {
@@ -14,22 +14,37 @@
         overflow: hidden;
         user-select: none;
       }
+      #root {
+        width: 100vw;
+        height: 100vh;
+      }
     </style>
+    <!-- Polyfill per evitare crash su process.env in ambienti statici come GitHub Pages -->
+    <script>
+      window.process = {
+        env: {
+          API_KEY: "" 
+        }
+      };
+    </script>
 <script type="importmap">
 {
   "imports": {
     "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/",
+    "react-dom": "https://esm.sh/react-dom@^19.2.3",
+    "react-dom/client": "https://esm.sh/react-dom@^19.2.3/client",
+    "react/jsx-runtime": "https://esm.sh/react@^19.2.3/jsx-runtime",
     "framer-motion": "https://esm.sh/framer-motion@^12.23.26",
-    "@google/genai": "https://esm.sh/@google/genai@^1.34.0"
+    "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>
 </head>
 <body>
     <div id="root"></div>
-    <!-- Cambiato in percorso relativo per GitHub Pages -->
+    <!-- Utilizzo di percorso relativo per compatibilità con sottocartelle GitHub -->
     <script type="module" src="index.tsx"></script>
 </body>
 </html>
