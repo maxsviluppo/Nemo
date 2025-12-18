@@ -32,6 +32,24 @@ export enum Emotion {
   RAINY = 'RAINY',
   CLOUDY = 'CLOUDY',
   SNOWY = 'SNOWY',
+  // Animals
+  CAT = 'CAT',
+  DOG = 'DOG',
+  ELEPHANT = 'ELEPHANT',
+  ANT = 'ANT',
+  MONKEY = 'MONKEY',
+  BIRD = 'BIRD',
+  // New 10 Expressions
+  ALIEN = 'ALIEN',
+  GHOST = 'GHOST',
+  FIRE = 'FIRE',
+  MUSIC = 'MUSIC',
+  BROKEN = 'BROKEN',
+  EATING = 'EATING',
+  SMART = 'SMART',
+  ROCKET = 'ROCKET',
+  ZEN = 'ZEN',
+  GLITCH = 'GLITCH',
   // Affirmation/Negation
   YES = 'YES',
   NO = 'NO'

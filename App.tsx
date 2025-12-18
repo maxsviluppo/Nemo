@@ -1,351 +1,241 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PetRobotFace from './components/PetRobotFace';
 import { Emotion } from './types';
-import { AudioSensor } from './services/audioSensor';
-import { soundService, BeepType } from './services/soundService';
-import { GoogleGenAI, Type } from "@google/genai";
-
-interface CustomMapping {
-  phrase: string;
-  emotion: Emotion;
-}
+import { useNemoSensors } from './hooks/useNemoSensors';
+import { useNemoBrain } from './hooks/useNemoBrain';
 
 const App: React.FC = () => {
-  const [currentEmotion, setCurrentEmotion] = useState<Emotion>(Emotion.NEUTRAL);
-  const [isAiEnabled, setIsAiEnabled] = useState(true);
-  const [isSensorEnabled, setIsSensorEnabled] = useState(false);
-  const [isCameraEnabled, setIsCameraEnabled] = useState(false);
-  const [isSoundEnabled, setIsSoundEnabled] = useState(true);
-  const [showControls, setShowControls] = useState(true);
-  const [isListeningForCommand, setIsListeningForCommand] = useState(false);
-  const [isThinking, setIsThinking] = useState(false);
-  const [nemoResponse, setNemoResponse] = useState<string | null>(null);
-  const [facePosition, setFacePosition] = useState<'left' | 'center' | 'right'>('center');
-  const [targetObject, setTargetObject] = useState<string | null>(null);
-  const [volume, setVolume] = useState(0);
-  const [brightness, setBrightness] = useState(0.5); 
-  const [permissionError, setPermissionError] = useState<string | null>(null);
-  
-  const [customMappings, setCustomMappings] = useState<CustomMapping[]>(() => {
-    const saved = localStorage.getItem('nemo_mappings');
-    return saved ? JSON.parse(saved) : [
-      { phrase: 'ciao', emotion: Emotion.HAPPY },
-      { phrase: 'dormi', emotion: Emotion.SLEEPING },
-      { phrase: 'ti voglio bene', emotion: Emotion.LOVE },
-      { phrase: 'fammi pensare', emotion: Emotion.THINKING },
-      { phrase: 'sei forte', emotion: Emotion.COOL },
-      { phrase: 'hai paura', emotion: Emotion.ANXIOUS },
-      { phrase: 'che shock', emotion: Emotion.SHOCKED },
-      { phrase: 'sogni d\'oro', emotion: Emotion.DREAMING }
-    ];
-  });
-
-  const audioSensorRef = useRef<AudioSensor>(new AudioSensor());
-  const emotionTimeoutRef = useRef<any | null>(null);
-  const inactivityTimeoutRef = useRef<any | null>(null);
-  const isReactingRef = useRef(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const visionIntervalRef = useRef<any>(null);
-  const volumeRequestRef = useRef<number | null>(null);
-
   const ROBOT_NAME = "Nemo";
   const INACTIVITY_DELAY = 8000;
 
-  useEffect(() => {
-    localStorage.setItem('nemo_mappings', JSON.stringify(customMappings));
-  }, [customMappings]);
+  // Environment Check
+  // Supports both Vite standard and the custom define in vite.config
+  const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || process.env.API_KEY;
 
-  const resetInactivityTimer = useCallback(() => {
-    if (inactivityTimeoutRef.current) clearTimeout(inactivityTimeoutRef.current);
+  const [showControls, setShowControls] = useState(true);
+  const [isSoundEnabled, setIsSoundEnabled] = useState(true);
+  const [brightness, setBrightness] = useState(0.5);
+  const inactivityTimeoutRef = useRef<any>(null);
+  const visionIntervalRef = useRef<any>(null);
+
+
+  const sensors = useNemoSensors(ROBOT_NAME);
+  // Brain now connects to sensors for reflexes
+  const brain = useNemoBrain(API_KEY, sensors.volume);
+
+  const [mousePos, setMousePos] = useState<{ x: number, y: number } | null>(null);
+
+  // Mouse Tracking for Interaction
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      // Don't track if sleeping
+      if (brain.currentEmotion === Emotion.SLEEPING) {
+        if (mousePos) setMousePos(null);
+        return;
+      }
+
+      const { clientX, clientY } = e;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      // Calculate normalized coordinates (-1 to +1)
+      const x = (clientX / width) * 2 - 1;
+      const y = (clientY / height) * 2 - 1;
+
+      setMousePos({ x, y });
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [brain.currentEmotion, mousePos]);
+
+  // Inactivity Timer for Controls
+  useEffect(() => {
+    const resetTimer = () => {
+      if (inactivityTimeoutRef.current) clearTimeout(inactivityTimeoutRef.current);
+      if (showControls) {
+        inactivityTimeoutRef.current = setTimeout(() => setShowControls(false), INACTIVITY_DELAY);
+      }
+    };
+
     if (showControls) {
-      inactivityTimeoutRef.current = setTimeout(() => {
-        setShowControls(false);
-      }, INACTIVITY_DELAY);
-    }
-  }, [showControls]);
-
-  useEffect(() => {
-    if (showControls) {
-      resetInactivityTimer();
-      const events = ['mousemove', 'mousedown', 'touchstart', 'keydown'];
-      events.forEach(e => window.addEventListener(e, resetInactivityTimer));
-      return () => {
-        events.forEach(e => window.removeEventListener(e, resetInactivityTimer));
-      };
-    }
-  }, [showControls, resetInactivityTimer]);
-
-  const setEmotionTemporarily = useCallback((emotion: Emotion, duration: number = 3000) => {
-    if (emotionTimeoutRef.current) clearTimeout(emotionTimeoutRef.current);
-    isReactingRef.current = true;
-    setCurrentEmotion(emotion);
-    emotionTimeoutRef.current = setTimeout(() => {
-      setCurrentEmotion(Emotion.NEUTRAL);
-      isReactingRef.current = false;
-    }, duration);
-  }, []);
-
-  const updateVolume = useCallback(() => {
-    if (isSensorEnabled) {
-      const v = audioSensorRef.current.getVolume();
-      setVolume(v);
-      volumeRequestRef.current = requestAnimationFrame(updateVolume);
-    }
-  }, [isSensorEnabled]);
-
-  useEffect(() => {
-    if (isSensorEnabled) {
-      volumeRequestRef.current = requestAnimationFrame(updateVolume);
-    } else {
-      if (volumeRequestRef.current) cancelAnimationFrame(volumeRequestRef.current);
-      setVolume(0);
+      resetTimer();
+      ['mousemove', 'mousedown', 'touchstart', 'keydown'].forEach(e => window.addEventListener(e, resetTimer));
     }
     return () => {
-      if (volumeRequestRef.current) cancelAnimationFrame(volumeRequestRef.current);
+      if (inactivityTimeoutRef.current) clearTimeout(inactivityTimeoutRef.current);
+      window.removeEventListener('mousemove', resetTimer); // simplified cleanup
     };
-  }, [isSensorEnabled, updateVolume]);
+  }, [showControls]);
 
-  const processVisuals = async () => {
-    if (!videoRef.current || !canvasRef.current || isThinking || !isAiEnabled || !process.env.API_KEY) return;
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    const context = canvas.getContext('2d');
-    if (!context || video.readyState !== video.HAVE_ENOUGH_DATA) return;
-    
-    canvas.width = 320;
-    canvas.height = 240;
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    const base64Image = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
-
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview", 
-        contents: [
-          {
-            parts: [
-              { inlineData: { mimeType: "image/jpeg", data: base64Image } },
-              { text: `Analizza la scena. JSON: {"seen": "string", "pos": "left"|"center"|"right", "emotion": "EMO"}` }
-            ]
-          }
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              seen: { type: Type.STRING },
-              pos: { type: Type.STRING },
-              emotion: { type: Type.STRING }
-            },
-            required: ["seen", "pos", "emotion"]
-          }
-        }
-      });
-
-      const dataJson = JSON.parse(response.text || "{}");
-      if (dataJson.seen && dataJson.seen !== 'none') {
-        setTargetObject(dataJson.seen);
-        setFacePosition(dataJson.pos || 'center');
-        const emo = (dataJson.emotion || "").toUpperCase() as Emotion;
-        if (Object.values(Emotion).includes(emo) && !isReactingRef.current) {
-          setCurrentEmotion(emo);
-        }
-      }
-    } catch (error) {
-      console.debug("Vision skipped");
-    }
-  };
-
+  // Connect Sensors to Brain: Vision
   useEffect(() => {
-    if (isCameraEnabled && isAiEnabled) {
-      visionIntervalRef.current = setInterval(processVisuals, 4000);
+    if (sensors.isCameraEnabled && sensors.videoRef.current) {
+      // Run vision check every 4 seconds
+      visionIntervalRef.current = setInterval(() => {
+        if (sensors.videoRef.current) {
+          brain.processVisuals(sensors.videoRef.current);
+        }
+      }, 4000);
     } else {
       if (visionIntervalRef.current) clearInterval(visionIntervalRef.current);
     }
     return () => clearInterval(visionIntervalRef.current);
-  }, [isCameraEnabled, isAiEnabled]);
+  }, [sensors.isCameraEnabled, brain.processVisuals]);
 
-  const processDiscourse = async (text: string) => {
-    const lowerText = text.toLowerCase();
-    const mapping = customMappings.find(m => lowerText.includes(m.phrase.toLowerCase()));
-    
-    if (mapping) {
-      setEmotionTemporarily(mapping.emotion, 5000);
-      setNemoResponse(`Mappa: ${mapping.phrase}`);
-      return;
-    }
-
-    if (!isAiEnabled || !process.env.API_KEY) return;
-
-    setIsThinking(true);
-    setCurrentEmotion(Emotion.SCANNING); 
-    setNemoResponse(null);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview", 
-        contents: `Sei Nemo. Rispondi brevemente a: "${text}". JSON: {"text": "risposta", "emotion": "EMO"}` ,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              text: { type: Type.STRING },
-              emotion: { type: Type.STRING }
-            },
-            required: ["text", "emotion"]
-          }
-        }
-      });
-
-      const data = JSON.parse(response.text || "{}");
-      setNemoResponse(data.text);
-      const emo = (data.emotion || "").toUpperCase() as Emotion;
-      if (Object.values(Emotion).includes(emo)) {
-        setEmotionTemporarily(emo, 6000);
-      }
-    } catch (error) {
-      setEmotionTemporarily(Emotion.CONFUSED, 3000);
-    } finally {
-      setIsThinking(false);
-    }
-  };
-
+  // Connect Sensors to Brain: Voice
   useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = 'it-IT';
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
-      if (transcript.includes(ROBOT_NAME.toLowerCase())) {
-        const cmd = transcript.split(ROBOT_NAME.toLowerCase())[1]?.trim();
-        if (cmd) processDiscourse(cmd);
-        else {
-          setCurrentEmotion(Emotion.ATTENTION);
-          setIsListeningForCommand(true);
-          setTimeout(() => setIsListeningForCommand(false), 5000);
-        }
-      } else if (isListeningForCommand) {
-        processDiscourse(transcript);
-        setIsListeningForCommand(false);
-      }
-    };
-
-    recognition.onend = () => { if (isSensorEnabled) try { recognition.start(); } catch {} };
-
-    if (isSensorEnabled) try { recognition.start(); } catch {}
-    return () => { try { recognition.stop(); } catch {} };
-  }, [isSensorEnabled, isListeningForCommand, isAiEnabled]);
-
-  const toggleSensor = async () => {
-    setPermissionError(null);
-    if (!isSensorEnabled) {
-      const success = await audioSensorRef.current.start();
-      if (success) setIsSensorEnabled(true);
-      else setPermissionError("Microfono negato.");
-    } else {
-      audioSensorRef.current.stop();
-      setIsSensorEnabled(false);
+    if (sensors.lastCommand) {
+      brain.processText(sensors.lastCommand);
+      sensors.clearCommand();
     }
-  };
+  }, [sensors.lastCommand, brain.processText, sensors.clearCommand]);
 
-  const toggleCamera = async () => {
-    setPermissionError(null);
-    if (!isCameraEnabled) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          setIsCameraEnabled(true);
-        }
-      } catch (e) { 
-        setPermissionError("Fotocamera negata.");
-      }
-    } else {
-      const stream = videoRef.current?.srcObject as MediaStream;
-      stream?.getTracks().forEach(t => t.stop());
-      setIsCameraEnabled(false);
-      setFacePosition('center');
-    }
-  };
+  // Handle Missing Key UI
+  if (!API_KEY) {
+    return (
+      <div className="h-screen w-screen bg-black text-white flex flex-col items-center justify-center p-8 text-center font-mono">
+        <h1 className="text-4xl font-bold mb-4 text-red-500">SYSTEM ERROR: MISSING CORTEX</h1>
+        <p className="mb-8 max-w-lg text-zinc-400">
+          Nemo requires a Gemini API Key to function.
+          Please create a <code className="bg-zinc-800 px-2 py-1 rounded">.env.local</code> file in the root directory with:
+        </p>
+        <div className="bg-zinc-900 p-4 rounded border border-zinc-700 select-all">
+          VITE_GEMINI_API_KEY=your_api_key_here
+        </div>
+      </div>
+    );
+  }
 
   const emotionsList = Object.values(Emotion);
 
   return (
-    <div className="h-screen w-screen bg-black overflow-hidden flex flex-col items-center justify-center font-sans text-white relative">
-      <video ref={videoRef} autoPlay playsInline className="hidden" />
-      <canvas ref={canvasRef} className="hidden" />
+    <div className="h-screen w-screen bg-black overflow-hidden flex flex-col items-center justify-center font-sans text-white relative select-none">
+      {/* Hidden Video Element for Sensors */}
+      <video ref={sensors.videoRef} autoPlay playsInline className="hidden" muted />
 
+      {/* Header Statues */}
       <div className="absolute top-8 left-8 z-50 pointer-events-none flex items-center gap-3">
-          <div className={`w-3 h-3 rounded-full ${isSensorEnabled ? 'bg-green-500 shadow-[0_0_10px_green]' : 'bg-red-500'}`} />
-          <span className="font-black text-xl tracking-tighter uppercase">{ROBOT_NAME} v2.0</span>
+        <motion.div
+          animate={{ opacity: [0.5, 1, 0.5] }}
+          transition={{ duration: 2, repeat: Infinity }}
+          className={`w-3 h-3 rounded-full ${sensors.isSensorEnabled ? 'bg-green-500 shadow-[0_0_10px_green]' : 'bg-red-500'}`}
+        />
+        <span className="font-black text-xl tracking-tighter uppercase font-mono text-zinc-300">
+          {ROBOT_NAME} <span className="text-xs ml-1 text-zinc-500">OS v2.1</span>
+        </span>
       </div>
 
-      <div className="flex-1 w-full relative flex items-center justify-center" onClick={() => setShowControls(true)}>
-        <PetRobotFace 
-          currentEmotion={currentEmotion} 
-          isListening={isThinking} 
+      {/* Main Face Container */}
+      <div className="flex-1 w-full relative flex items-center justify-center cursor-pointer"
+        onClick={() => {
+          // Priority to petting interaction
+          brain.handleTouch();
+        }}
+      >
+        <PetRobotFace
+          currentEmotion={brain.currentEmotion}
+          isListening={sensors.isListeningForCommand || brain.isThinking} // Show active when listening OR thinking
           isSoundEnabled={isSoundEnabled}
-          lookDirection={facePosition}
-          targetObject={targetObject}
-          volume={volume}
-          brightness={brightness}
+          lookDirection={brain.facePosition}
+          targetObject={brain.targetObject}
+          volume={sensors.volume}
+          brightness={brain.brightness}
+          mousePos={mousePos}
         />
 
+        {/* Subtitles (Hearing) */}
+        <div className="absolute bottom-24 w-full flex justify-center pointer-events-none">
+          <span className="text-white/50 text-sm font-mono bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm transition-opacity duration-300"
+            style={{ opacity: sensors.transcript ? 1 : 0 }}>
+            👂 {sensors.transcript}
+          </span>
+        </div>
+
+        {/* Brain Output / Dialogue Bubbles */}
         <AnimatePresence>
-          {nemoResponse && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="absolute top-12 right-12 max-w-sm bg-zinc-900/80 backdrop-blur-xl border border-white/10 p-6 rounded-3xl shadow-2xl z-20"
+          {brain.nemoResponse && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.8, y: -20 }}
+              className="absolute top-24 right-8 md:top-32 md:right-32 max-w-sm z-20"
             >
-              <p className="text-lg font-medium italic text-right">"{nemoResponse}"</p>
+              <div className="bg-zinc-900/80 backdrop-blur-xl border border-white/10 p-6 rounded-3xl rounded-tr-none shadow-2xl relative">
+                <div className="absolute -top-2 -right-2 w-4 h-4 bg-blue-500 rounded-full animate-ping" />
+                <p className="text-lg font-medium italic text-right text-blue-100">"{brain.nemoResponse}"</p>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
+      {/* Control Dashboard */}
       <AnimatePresence>
         {showControls && (
-          <motion.div 
-            initial={{ y: 100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 100, opacity: 0 }}
-            className="fixed bottom-0 left-0 w-full p-6 z-40"
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className="fixed bottom-0 left-0 w-full p-4 md:p-6 z-40 flex justify-center"
           >
-            <div className="max-w-4xl mx-auto bg-zinc-900/95 backdrop-blur-2xl rounded-[32px] p-6 border border-white/10 shadow-2xl">
-              <div className="flex items-center justify-between mb-6">
-                <span className="text-xs font-black uppercase tracking-widest text-zinc-500">Nemo OS Dashboard</span>
-                <div className="flex gap-2">
-                  <button onClick={toggleCamera} className={`p-3 rounded-xl transition-all ${isCameraEnabled ? 'bg-blue-500' : 'bg-white/5 opacity-50'}`}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  </button>
-                  <button onClick={toggleSensor} className={`p-3 rounded-xl transition-all ${isSensorEnabled ? 'bg-green-500' : 'bg-white/5 opacity-50'}`}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 1v11"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 23v-4"/></svg>
-                  </button>
-                  <button onClick={() => setIsSoundEnabled(!isSoundEnabled)} className={`p-3 rounded-xl transition-all ${isSoundEnabled ? 'bg-yellow-500' : 'bg-white/5 opacity-50'}`}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-                  </button>
-                  <button onClick={() => setShowControls(false)} className="p-3 bg-white/10 rounded-xl hover:bg-white/20 transition-colors">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="m6 9 6 6 6-6"/></svg>
+            <div className="w-full max-w-4xl bg-black/80 backdrop-blur-3xl rounded-[3rem] p-6 border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] ring-1 ring-white/5">
+
+              {/* Toolbar */}
+              <div className="flex items-center justify-between mb-6 px-2">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500 mb-1">System Control</span>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-1.5 h-1.5 rounded-full 
+                        ${brain.isThinking ? 'bg-purple-500 animate-pulse' :
+                        sensors.isSensorEnabled ? 'bg-green-500 shadow-[0_0_5px_green]' : 'bg-zinc-700'}`}
+                    />
+                    <span className="text-xs font-mono text-zinc-400">
+                      {brain.isThinking ? 'NEURAL PROCESSING' :
+                        sensors.isSensorEnabled ? 'SYSTEM ONLINE (LISTENING)' : 'SYSTEM OFFLINE'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <ControlBtn
+                    active={sensors.isCameraEnabled}
+                    onClick={sensors.toggleCamera}
+                    icon={<CameraIcon />}
+                    color="blue"
+                  />
+                  <ControlBtn
+                    active={sensors.isSensorEnabled}
+                    onClick={sensors.toggleSensor}
+                    icon={<MicIcon />}
+                    color="green"
+                  />
+                  <ControlBtn
+                    active={isSoundEnabled}
+                    onClick={() => setIsSoundEnabled(!isSoundEnabled)}
+                    icon={<SoundIcon muted={!isSoundEnabled} />}
+                    color="yellow"
+                  />
+                  <button onClick={() => setShowControls(false)} className="p-4 bg-white/5 rounded-2xl hover:bg-white/10 transition-colors">
+                    <ChevronDownIcon />
                   </button>
                 </div>
               </div>
-              
-              <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2 overflow-y-auto max-h-32 pr-2">
+
+              {/* Emotion Grid */}
+              <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2 overflow-y-auto max-h-40 p-2 custom-scrollbar">
                 {emotionsList.map((emo) => (
-                  <button key={emo} onClick={() => setEmotionTemporarily(emo)} className={`py-2 px-1 rounded-lg text-[9px] font-bold uppercase transition-all ${currentEmotion === emo ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/30' : 'bg-white/5 text-zinc-400 hover:bg-white/10'}`}>
+                  <button
+                    key={emo}
+                    onClick={() => brain.setEmotionTemporarily(emo)}
+                    className={`py-3 px-2 rounded-xl text-[10px] font-bold uppercase transition-all duration-200 border border-transparent
+                        ${brain.currentEmotion === emo
+                        ? 'bg-white text-black scale-105 shadow-lg shadow-white/20'
+                        : 'bg-white/5 text-zinc-500 hover:bg-white/10 hover:text-zinc-300 hover:border-white/10'}`}
+                  >
                     {emo}
                   </button>
                 ))}
@@ -356,23 +246,68 @@ const App: React.FC = () => {
       </AnimatePresence>
 
       {!showControls && (
-        <motion.button 
-          initial={{ opacity: 0 }} 
-          animate={{ opacity: 1 }}
+        <motion.button
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
           onClick={() => setShowControls(true)}
-          className="fixed bottom-8 px-8 py-3 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] font-black uppercase tracking-widest transition-all z-30"
+          className="fixed bottom-8 px-8 py-3 rounded-full bg-zinc-900/90 backdrop-blur border border-white/10 text-[10px] font-black uppercase tracking-[0.2em] transition-all z-30 hover:bg-zinc-800 shadow-2xl"
         >
-          Controlli
+          SYSTEM MENU
         </motion.button>
       )}
 
-      {permissionError && (
-        <div className="fixed top-8 right-8 bg-red-500 text-white text-[10px] font-bold px-4 py-2 rounded-full z-[60] shadow-xl">
-          {permissionError}
+      {sensors.permissionError && (
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 bg-red-500/90 backdrop-blur text-white text-xs font-bold px-6 py-3 rounded-full z-[60] shadow-xl flex items-center gap-2">
+          <span className="w-2 h-2 bg-white rounded-full animate-bounce" />
+          <span>{sensors.permissionError}</span>
+          <button
+            onClick={() => alert("Se il microfono è bloccato:\n1. Clicca sull'icona del lucchetto 🔒 nella barra degli indirizzi (in alto a sinistra).\n2. Clicca su 'Impostazioni sito' o attiva l'interruttore 'Microfono'.\n3. Ricarica la pagina.")}
+            className="ml-2 bg-white text-red-600 px-3 py-1 rounded-full text-[10px] uppercase shadow-sm hover:bg-zinc-100"
+          >
+            Come Risolvere
+          </button>
         </div>
       )}
     </div>
   );
 };
+
+// Subcomponents for cleaner JSX
+const ControlBtn = ({ active, onClick, icon, color }: any) => {
+  const colorClasses = {
+    blue: active ? 'bg-blue-500 text-white shadow-[0_0_20px_rgba(59,130,246,0.5)]' : 'bg-zinc-800/50 text-zinc-500',
+    green: active ? 'bg-green-500 text-white shadow-[0_0_20px_rgba(34,197,94,0.5)]' : 'bg-zinc-800/50 text-zinc-500',
+    yellow: active ? 'bg-yellow-500 text-white shadow-[0_0_20px_rgba(234,179,8,0.5)]' : 'bg-zinc-800/50 text-zinc-500',
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      className={`p-4 rounded-2xl transition-all duration-300 backdrop-blur-sm ${colorClasses[color as keyof typeof colorClasses]} hover:scale-105 active:scale-95`}
+    >
+      {icon}
+    </button>
+  );
+}
+
+const CameraIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg>
+);
+
+const MicIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1v11" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><path d="M12 23v-4" /></svg>
+);
+
+const SoundIcon = ({ muted }: { muted: boolean }) => (
+  muted
+    ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></svg>
+    : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z" /><path d="M15.54 8.46a5 5 0 0 1 0 7.07" /></svg>
+);
+
+const ChevronDownIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+);
 
 export default App;
