@@ -131,7 +131,14 @@ const PetRobotFace: React.FC<PetRobotFaceProps> = ({
       const isTrackingObject = !!targetObject;
       const prevRotation = lookRef.current.rotate;
 
-      if (isTrackingObject) {
+      if (currentEmotion === Emotion.ANXIOUS) {
+        // Logica specifica per ANXIOUS: sguardi rapidi ed erratici
+        targetX = (Math.random() - 0.5) * 110;
+        targetY = (Math.random() - 0.5) * 50;
+        targetRotate = targetX * 0.12;
+        targetScanScale = 0.85 + Math.random() * 0.3;
+        nextJump = 200 + Math.random() * 600; // Molto frequente
+      } else if (isTrackingObject) {
         const offsetMultiplier = 95;
         if (lookDirection === 'left') targetX = -offsetMultiplier;
         else if (lookDirection === 'right') targetX = offsetMultiplier;
@@ -183,7 +190,7 @@ const PetRobotFace: React.FC<PetRobotFaceProps> = ({
     };
 
     const applyMicroSaccade = () => {
-      const stabilityFactor = !!targetObject || isDrifting ? 0.2 : 1;
+      const stabilityFactor = !!targetObject || isDrifting ? 0.2 : (currentEmotion === Emotion.ANXIOUS ? 2.5 : 1);
       setLookOffset(prev => ({
         ...prev,
         x: prev.x + (Math.random() - 0.5) * 0.7 * stabilityFactor, 
@@ -191,7 +198,7 @@ const PetRobotFace: React.FC<PetRobotFaceProps> = ({
         rotate: prev.rotate + (Math.random() - 0.5) * 0.18 * stabilityFactor
       }));
       
-      const jitterFrequency = volume > 60 ? 250 : 550;
+      const jitterFrequency = (volume > 60 || currentEmotion === Emotion.ANXIOUS) ? 150 : 550;
       microSaccadeRef.current = setTimeout(applyMicroSaccade, jitterFrequency + Math.random() * 400);
     };
 
@@ -208,7 +215,7 @@ const PetRobotFace: React.FC<PetRobotFaceProps> = ({
   useEffect(() => {
     const blinkInterval = setInterval(() => {
         if (currentEmotion === Emotion.SLEEPING || currentEmotion === Emotion.RECOGNIZING || currentEmotion === Emotion.SPEECHLESS) return;
-        const isDouble = Math.random() > 0.85;
+        const isDouble = Math.random() > 0.85 || currentEmotion === Emotion.ANXIOUS;
         setBlink(true);
         setTimeout(() => {
           setBlink(false);
@@ -219,12 +226,12 @@ const PetRobotFace: React.FC<PetRobotFaceProps> = ({
             }, 70);
           }
         }, 110);
-    }, 4500 + Math.random() * 12000); 
+    }, (currentEmotion === Emotion.ANXIOUS ? 1200 : 4500) + Math.random() * 8000); 
 
     const floatInterval = setInterval(() => {
         const time = Date.now() / 3200;
         setFloating({ 
-          y: Math.sin(time) * 4,
+          y: Math.sin(time) * (currentEmotion === Emotion.ANXIOUS ? 6 : 4),
           x: Math.cos(time * 0.6) * 1.5 
         }); 
     }, 16);
@@ -258,8 +265,8 @@ const PetRobotFace: React.FC<PetRobotFaceProps> = ({
       case Emotion.ANXIOUS: 
         return (
           <motion.g 
-            animate={{ x: [-2, 2, -2], y: [-1, 1, -1] }} 
-            transition={{ repeat: Infinity, duration: 0.1 }}
+            animate={{ x: [-3, 3, -3], y: [-2, 2, -2] }} 
+            transition={{ repeat: Infinity, duration: 0.08 }}
           >
             <EyeParts.AnxiousEye />
           </motion.g>
@@ -314,9 +321,9 @@ const PetRobotFace: React.FC<PetRobotFaceProps> = ({
 
   const organicTransition = {
     type: 'spring',
-    stiffness: isDrifting ? 15 : (!!targetObject ? 115 : 80), 
-    damping: isDrifting ? 25 : 16,
-    mass: isDrifting ? 2.5 : 1.5, 
+    stiffness: isDrifting ? 15 : (currentEmotion === Emotion.ANXIOUS ? 250 : (!!targetObject ? 115 : 80)), 
+    damping: isDrifting ? 25 : (currentEmotion === Emotion.ANXIOUS ? 12 : 16),
+    mass: isDrifting ? 2.5 : (currentEmotion === Emotion.ANXIOUS ? 0.8 : 1.5), 
     restDelta: 0.001
   };
 

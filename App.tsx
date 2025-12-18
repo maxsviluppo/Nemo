@@ -47,6 +47,7 @@ const App: React.FC = () => {
 
   const audioSensorRef = useRef<AudioSensor>(new AudioSensor());
   const emotionTimeoutRef = useRef<any | null>(null);
+  const inactivityTimeoutRef = useRef<any | null>(null);
   const isReactingRef = useRef(false);
   const recognitionRef = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -55,22 +56,43 @@ const App: React.FC = () => {
   const volumeRequestRef = useRef<number | null>(null);
 
   const ROBOT_NAME = "Nemo";
+  const INACTIVITY_DELAY = 10000; // 10 secondi
 
   useEffect(() => {
     localStorage.setItem('nemo_mappings', JSON.stringify(customMappings));
   }, [customMappings]);
 
-  // Funzione semplificata: ora il volto gestisce la maggior parte dei suoni via useEffect
-  const triggerManualSound = useCallback((type: BeepType) => {
-    if (!isSoundEnabled) return;
-    soundService.playBeep(type);
-  }, [isSoundEnabled]);
+  // Gestione Auto-nascondimento Controlli
+  const resetInactivityTimer = useCallback(() => {
+    if (inactivityTimeoutRef.current) clearTimeout(inactivityTimeoutRef.current);
+    if (showControls) {
+      inactivityTimeoutRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, INACTIVITY_DELAY);
+    }
+  }, [showControls]);
+
+  useEffect(() => {
+    if (showControls) {
+      resetInactivityTimer();
+      window.addEventListener('mousemove', resetInactivityTimer);
+      window.addEventListener('mousedown', resetInactivityTimer);
+      window.addEventListener('touchstart', resetInactivityTimer);
+      window.addEventListener('keydown', resetInactivityTimer);
+    }
+    return () => {
+      if (inactivityTimeoutRef.current) clearTimeout(inactivityTimeoutRef.current);
+      window.removeEventListener('mousemove', resetInactivityTimer);
+      window.removeEventListener('mousedown', resetInactivityTimer);
+      window.removeEventListener('touchstart', resetInactivityTimer);
+      window.removeEventListener('keydown', resetInactivityTimer);
+    };
+  }, [showControls, resetInactivityTimer]);
 
   const setEmotionTemporarily = useCallback((emotion: Emotion, duration: number = 3000) => {
     if (emotionTimeoutRef.current) clearTimeout(emotionTimeoutRef.current);
     isReactingRef.current = true;
     setCurrentEmotion(emotion);
-    // soundService è ora attivato dal componente PetRobotFace al cambio di currentEmotion
     emotionTimeoutRef.current = setTimeout(() => {
       setCurrentEmotion(Emotion.NEUTRAL);
       isReactingRef.current = false;
